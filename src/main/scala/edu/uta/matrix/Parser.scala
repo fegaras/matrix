@@ -70,7 +70,7 @@ object Parser extends StandardTokenParsers {
                           "||", "&&", "!", "==", "<=", ">=", "<", ">", "!=", "+", "-", "*", "/", "%",
                           "^", "|", "&" )
 
-  lexical.reserved += ( "var", "for", "foreach", "in", "do", "having", "if", "else", "true", "false" )
+  lexical.reserved += ( "val", "var", "for", "foreach", "in", "do", "having", "if", "else", "true", "false" )
 
   /* groups of infix operator precedence, from low to high */
   val operator_precedence: List[Parser[String]]
@@ -175,7 +175,9 @@ object Parser extends StandardTokenParsers {
         )
 
   def stmt: Parser[Stmt]
-      = ( "var" ~ ident ~ ":" ~ stype ~ opt( "=" ~ expr ) ^^
+      = ( "val" ~ ident ~ ":" ~ stype ~ "=" ~ expr ^^
+          { case _~v~_~t~_~e => DeclareVal(v,t,e) }
+        | "var" ~ ident ~ ":" ~ stype ~ opt( "=" ~ expr ) ^^
           { case _~v~_~t~None => DeclareVar(v,t,Var("null"))
             case _~v~_~t~Some(_~e) => DeclareVar(v,t,e) }
         | "{" ~ rep( stmt ~ ";" ) ~ "}" ^^

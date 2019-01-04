@@ -70,6 +70,7 @@ sealed abstract class Expr extends Positional
     case class BoolConst ( value: Boolean ) extends Expr
 
 sealed abstract class Stmt extends Positional
+    case class DeclareVal ( varname: String, vartype: Type, value: Expr ) extends Stmt
     case class DeclareVar ( varname: String, vartype: Type, value: Expr ) extends Stmt
     case class Block ( stmts: List[Stmt] ) extends Stmt
     case class Assign ( destination: Expr, value: Expr ) extends Stmt
@@ -142,10 +143,10 @@ object AST {
   /** fold over expressions */
   def accumulate[T] ( e: Expr, f: Expr => T, acc: (T,T) => T, zero: T ): T =
     e match {
-      case Nth(x,_) => accumulate(x,f,acc,zero)
-      case Project(x,_) => accumulate(x,f,acc,zero)
-      case VectorIndex(b,i) => accumulate(b,f,acc,f(i))
-      case MatrixIndex(b,i,j) => accumulate(b,f,acc,acc(f(i),f(j)))
+      case Nth(x,_) => f(x)
+      case Project(x,_) => f(x)
+      case VectorIndex(b,i) => acc(f(b),f(i))
+      case MatrixIndex(b,i,j) => acc(f(b),acc(f(i),f(j)))
       case flatMap(b,x) => acc(f(b),f(x))
       case groupBy(x) => f(x)
       case orderBy(x) => f(x)

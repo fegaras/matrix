@@ -26,93 +26,128 @@ object Translator extends Typechecker {
   val vector = BaseMonoid("vector")
   val matrix = BaseMonoid("matrix")
 
-  def translate ( e: Expr, env: Environment ): Expr
+  def translate ( e: Expr, globals: Environment, locals: Environment ): Expr
     = { val state = newvar
         Lambda(VarPat(state),
           e match {
+          case Var(n) if locals.contains(n)
+            => Var(n)
           case Var(n)
             => Project(Var(state),n)
-          case Nth(u,n)
-            => Nth(Apply(translate(u,env),Var(state)),n)
-          case Project(u,a)
-            => Project(Apply(translate(u,env),Var(state)),a)
           case VectorIndex(u,ii)
             => val i = newvar
                val v = newvar
-               val ic = Apply(translate(ii,env),Var(state))
+               val ic = Apply(translate(ii,globals,locals),Var(state))
                flatMap(Lambda(TuplePat(List(VarPat(i),VarPat(v))),
                               IfE(Call("==",List(Var(i),ic)),
                                   Elem(vector,Var(v)),Empty(vector))),
-                       Apply(translate(u,env),Var(state)))
+                       Apply(translate(u,globals,locals),Var(state)))
           case MatrixIndex(u,ii,jj)
             => val i = newvar
                val j = newvar
                val v = newvar
-               val ic = Apply(translate(ii,env),Var(state))
-               val jc = Apply(translate(jj,env),Var(state))
+               val ic = Apply(translate(ii,globals,locals),Var(state))
+               val jc = Apply(translate(jj,globals,locals),Var(state))
                flatMap(Lambda(TuplePat(List(TuplePat(List(VarPat(i),VarPat(j))),
                                             VarPat(v))),
                               IfE(Call("&&",List(Call("==",List(Var(i),ic)),
                                                  Call("==",List(Var(j),jc)))),
                                   Elem(matrix,Var(v)),Empty(matrix))),
-                       Apply(translate(u,env),Var(state)))
-          case Call(f,es)
-            => Call(f,es.map(x => Apply(translate(x,env),Var(state))))
-          case _ => e
+                       Apply(translate(u,globals,locals),Var(state)))
+          case Let(p,u,b)
+            => Let(p,Apply(translate(u,globals,locals),Var(state)),
+                   Apply(translate(b,globals,bindPattern(p,typecheck(u,locals++globals),locals++globals)),
+                         Var(state)))
+          case _ => apply(e,x => Apply(translate(x,globals,locals),Var(state)))
         }
     )}
 
-  def update ( dest: Expr, value: Expr, state: String, env: Environment ): Expr
+  def update ( dest: Expr, value: Expr, state: Expr, globals: Environment, locals: Environment ): Expr
     = dest match {
+        case Var(n) if locals.contains(n)
+          => throw new Error("Local variable "+n+" cannot be updated")
         case Var(n)
-          => Record(env.map{ case (v,_) => v -> (if (v == n) value else Project(Var(state),v)) })
+          => Record(globals.map{ case (v,_) => v -> (if (v == n) value else Project(state,v)) })
         case Project(u,a)
-          => typecheck(u,env) match {
+          => typecheck(u,locals++globals) match {
                 case RecordType(cs)
-                  => update(u,Record(cs.map{ case (v,_) => v -> (if (v == a) value else Project(u,v)) }),state,env)
+                  => update(u,Record(cs.map{ case (v,_) => v -> (if (v == a) value else Project(u,v)) }),
+                            state,globals,locals)
                 case t => throw new Error("Record projection "+dest+" must be over a record (found "+t+")")
              }
         case Nth(u,n)
-          => typecheck(u,env) match {
+          => typecheck(u,locals++globals) match {
                 case TupleType(cs)
-                  => update(u,Tuple((1 to cs.length).map( i => if (i == n) value else Nth(u,i) ).toList),state,env)
+                  => update(u,Tuple((1 to cs.length).map( i => if (i == n) value else Nth(u,i) ).toList),
+                            state,globals,locals)
                 case t => throw new Error("Tuple projection "+dest+" must be over a tuple (found "+t+")")
              }
         case VectorIndex(u,i)
-          => update(u,Merge(Apply(translate(u,env),Var(state)),Elem(vector,Tuple(List(i,value)))),state,env)
+          => update(u,Merge(Apply(translate(u,globals,locals),state),Elem(vector,Tuple(List(i,value)))),
+                    state,globals,locals)
         case MatrixIndex(u,i,j)
-          => update(u,Merge(dest,Elem(matrix,Tuple(List(Tuple(List(i,j)),value)))),state,env)
+          => update(u,Merge(dest,Elem(matrix,Tuple(List(Tuple(List(i,j)),value)))),
+                    state,globals,locals)
+        case _ => throw new Error("Illegal destination: "+dest)
     }
 
-  def translate ( s: Stmt, env: Environment ): (Expr,Environment)
+  def translate ( s: Stmt, globals: Environment, locals: Environment ): Expr
     = { val state = newvar
         s match {
-          case DeclareVar(v,t,Var("null"))
-            => (Lambda(VarPat(state),Var(state)),
-                env+((v,t)))
-          case DeclareVar(v,t,e)
-            => (Lambda(VarPat(state),update(Var(v),Apply(translate(e,env),Var(state)),state,env+((v,t)))),
-                env+((v,t)))
           case Assign(d,e)
-            => (Lambda(VarPat(state),update(d,Apply(translate(e,env),Var(state)),state,env)),env)
+            => Lambda(VarPat(state),
+                      update(d,Apply(translate(e,globals,locals),Var(state)),
+                             Var(state),globals,locals))
           case Block(ss)
-            => ss.foldLeft((Lambda(VarPat(state),Var(state)),env)){
-                    case ((r,renv),stmt)
-                      => val (e,nenv) = translate(stmt,renv)
-                         val st = newvar
-                         (Lambda(VarPat(st),Apply(e,Apply(r,Var(st)))),nenv) }
+            => val (ne,_,_) = ss.foldLeft((Lambda(VarPat(state),Var(state)),globals,locals)) {
+                    case ((f,gs,ls),DeclareVal(v,t,e))
+                      => val st = newvar
+                         ( Lambda(VarPat(st),
+                                  Let(VarPat(v),Apply(translate(e,gs,ls),Var(st)),
+                                      Apply(f,Var(st)))),
+                           gs, ls+((v,t)) )
+                    case ((f,gs,ls),DeclareVar(v,t,Var("null")))
+                      => val st = newvar
+                         ( Lambda(VarPat(st),Apply(f,Var(st))),
+                           gs+((v,t)), ls )
+                    case ((f,gs,ls),DeclareVar(v,t,e))
+                      => val st = newvar
+                         val nst = newvar
+                         ( Lambda(VarPat(st),
+                                  Let(VarPat(nst),Apply(f,Var(st)),
+                                      update(Var(v),Apply(translate(e,gs,ls),Var(nst)),
+                                             Var(nst),gs+((v,t)),ls))),
+                           gs+((v,t)), ls )
+                    case ((f,gs,ls),stmt)
+                      => val st = newvar
+                         ( Lambda(VarPat(st),
+                                  Apply(translate(stmt,gs,ls),Apply(f,Var(st)))),
+                           gs, ls )
+                    }
+               ne
           case ForeachS(v,e,b)
-            => typecheck(e,env) match {
+            => typecheck(e,locals++globals) match {
                   case ParametricType(_,List(tp))
-                    => val (be,nenv) = translate(b,env+((v,tp)))
-                       (flatMap(Lambda(VarPat(v),Elem(composition,be)),
-                                Apply(translate(e,env),Var(state))),
-                        nenv)
+                    => Lambda(VarPat(state),
+                              Apply(flatMap(Lambda(VarPat(v),Elem(composition,translate(b,globals,locals+((v,tp))))),
+                                            Apply(translate(e,globals,locals),Var(state))),
+                                    Var(state)))
                   case _ => throw new Error("Foreach statement must be over a collection: "+s)
                }
+          case ForS(v,n1,n2,n3,b)
+            => Lambda(VarPat(state),
+                      Apply(flatMap(Lambda(VarPat(v),Elem(composition,translate(b,globals,locals+((v,intType))))),
+                                    Apply(translate(Call("gen",List(n1,n2,n3)),globals,locals),Var(state))),
+                            Var(state)))
+          case IfS(p,te,ee)
+            => Lambda(VarPat(state),
+                      IfE(Apply(translate(p,globals,locals),Var(state)),
+                          Apply(translate(te,globals,locals),Var(state)),
+                          Apply(translate(ee,globals,locals),Var(state))))
+          case _ => throw new Error("Illegal statement: "+s)
         }
   }
 
   def translate ( s: Stmt ): Expr
-    = Apply(translate(s,Map():Environment)._1,Record(Map()))
+    = Apply(translate(s,Map():Environment,Map():Environment),Record(Map()))
 }

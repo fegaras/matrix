@@ -82,8 +82,11 @@ object Pretty extends RegexParsers {
             .mkString(f+"(", ",\n"+prefix+" "*(position+f.length+1), ")")
       case TupleNode(l)
         => l.map(pretty(_,position)).mkString("( ", ", ", " )")
+      case MapNode(l) if position+size(e) <= screen_size
+        => l.map{ case (v,a) => pretty(v,position)+" = "+pretty(a,position) }.mkString("< ", ", ", " >")
       case MapNode(l)
-        => l.map{ case (v,a) => pretty(v,position)+" = "+pretty(a,position+size(v)+3) }.mkString("< ", ", ", " >")
+        => l.map{ case (v,a) => pretty(v,position+2)+" = "+pretty(a,position+size(v)+3) }
+            .mkString("< ", ",\n"+prefix+" "*(position+2), " >")
       case LeafS(v)
         => v.toString
       case LeafD(d)

@@ -27,10 +27,35 @@ object Normalizer {
                   m.foldLeft(b){ case (r,(from,to)) => subst(from,Var(to),r) })
     }
 
+  def isSimple ( e: Expr ): Boolean =
+    e match {
+      case Var(_) => true
+      case StringConst(_) => true
+      case CharConst(_) => true
+      case IntConst(_) => true
+      case LongConst(_) => true
+      case DoubleConst(_) => true
+      case BoolConst(_) => true
+      case Nth(u,_) => isSimple(u)
+      case Project(u,_) => isSimple(u)
+      case VectorIndex(u,i) => isSimple(u) && isSimple(i)
+      case MatrixIndex(u,i,j) => isSimple(u) && isSimple(i) && isSimple(j)
+      case Tuple(cs) => cs.isEmpty || cs.map(isSimple).reduce(_&&_)
+      case Collection(_,cs) => cs.isEmpty || cs.map(isSimple).reduce(_&&_)
+      case Record(cs) => cs.isEmpty || cs.map{ case (_,u) => isSimple(u) }.reduce(_&&_)
+      case _ => false
+    }
+
   /** normalize ASTs */
   def normalize ( e: Expr ): Expr =
     e match {
-      case Apply(Lambda(VarPat(v),b),u)
+      case Apply(Lambda(p@VarPat(v),b),u)
+        => val nu = normalize(u)
+           val nb = normalize(b)
+           normalize(if (isSimple(nu) || occurrences(v,nb) <= 1)
+                        subst(Var(v),nu,nb)
+                     else Let(p,nu,nb))
+      case Let(VarPat(v),u,b) if isSimple(u) || occurrences(v,b) <= 1
         => normalize(subst(Var(v),u,b))
       case flatMap(f,flatMap(g,x))
         => renameVars(g) match {

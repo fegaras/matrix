@@ -109,9 +109,12 @@ class Typechecker {
                ParametricType(f,List(tp))
           case Call(f,args)
             => val tps = args.map(typecheck(_,env))
-               functions.takeWhile{ case (n,ts,_) => n == f && (ts zip tps).map{ case (t1,t2) => typeMatch(t1,t2) }.reduce(_&&_) } match {
-                 case (_,_,t)::_ => t
-                 case _ => throw new Error("Function "+f+" with arguments of type "+tps+" in "+e+" has not been declared")
+               functions.filter{ case (n,ts,_) => n == f && ts.length == tps.length &&
+                                                  (ts zip tps).map{ case (t1,t2) => typeMatch(t1,t2) }
+                                                              .reduce(_&&_) } match {
+                            case (_,_,t)::_ => t
+                            case _ => throw new Error("Function "+f+" with arguments of type "
+                                                      +tps+" in "+e+" has not been declared")
                }
           case IfE(p,a,b)
             => if (typecheck(p,env) != boolType)
@@ -120,18 +123,50 @@ class Typechecker {
                if (!typeMatch(typecheck(b,env),tp))
                  throw new Error("Ill-type if-expression"+e)
                tp
+          case Apply(Lambda(p,b),arg)
+            => typecheck(b,bindPattern(p,typecheck(arg,env),env))
+          case Apply(flatMap(Lambda(p,Elem(BaseMonoid(composition),Lambda(q,b))),u),x)
+            => val xtp = typecheck(x,env)
+               typecheck(u,env) match {
+                  case ParametricType(f,List(utp)) if List("vector","matrix","bag","list").contains(f)
+                    => typecheck(b,bindPattern(q,xtp,bindPattern(p,utp,env)))
+                  case _ => throw new Error("Wrong flatMap on function composition: "+e)
+               }
+               xtp
+          case Apply(f,arg)
+            => val tp = typecheck(arg,env)
+               typecheck(f,env) match {
+                  case FunctionType(dt,rt)
+                    => if (typeMatch(dt,tp)) rt
+                      else throw new Error("Function "+f+" cannot be applied to "+arg+" of type "+tp);
+                  case tp => throw new Error("Expected a function "+f)
+               }
+          case Tuple(cs)
+            => TupleType(cs.map{ typecheck(_,env) })
+          case Record(cs)
+            => RecordType(cs.map{ case (v,u) => v->typecheck(u,env) })
+          case flatMap(Lambda(p,b),u)
+            => typecheck(u,env) match {
+                  case ParametricType(f,List(tp)) if List("vector","matrix","bag","list").contains(f)
+                    => typecheck(b,bindPattern(p,tp,env))
+                  case tp => throw new Error("flatMap must be over a collection in "+e+" (found "+tp+")")
+               }
           case StringConst(_) => stringType
           case IntConst(_) => intType
           case DoubleConst(_) => doubleType
           case BoolConst(_) => boolType
-          case _ => throw new Error("Illegal expresion: "+e)
+          case _ => throw new Error("Illegal expression: "+e)
       }
 
     def typecheck ( s: Stmt, env: Environment ): Environment
       = s match {
+          case DeclareVal(v,t,e)
+            => if (!typeMatch(typecheck(e,env),t))
+                  throw new Error("Value "+e+" has not type "+t)
+               else env+((v,t))
           case DeclareVar(v,t,Var("null"))
             => env+((v,t))
-         case DeclareVar(v,t,e)
+          case DeclareVar(v,t,e)
             => if (!typeMatch(typecheck(e,env),t))
                   throw new Error("Value "+e+" has not type "+t)
                else env+((v,t))
@@ -169,10 +204,13 @@ class Typechecker {
       ("%",List(intType,intType),intType),
       ("/",List(doubleType,doubleType),doubleType),
       ("-",List(intType),intType),
-      ("-",List(doubleType),doubleType)
+      ("-",List(doubleType),doubleType),
+      ("gen",List(intType,intType,intType),ParametricType("list",List(intType)))
     )
 
     val initialEnvironment: Environment = Map()
+
+    def typecheck ( e: Expr ): Type = typecheck(e,initialEnvironment)
 
     def typecheck ( s: Stmt ) { typecheck(s,initialEnvironment) }
 }

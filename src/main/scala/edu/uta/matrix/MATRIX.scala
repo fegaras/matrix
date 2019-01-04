@@ -25,5 +25,6 @@ object MATRIX {
     println(Pretty.print(e1.toString))
     val ne = Normalizer.normalizeAll(e1)
     println(Pretty.print(ne.toString))
+    println(new Typechecker().typecheck(ne))
   }
 }
