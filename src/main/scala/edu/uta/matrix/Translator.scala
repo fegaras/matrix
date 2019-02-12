@@ -35,6 +35,7 @@ object Translator extends Typechecker {
           case Var(n)
             => Project(Var(state),n)
           case VectorIndex(u,ii)
+            if false
             => val i = newvar
                val v = newvar
                val ic = Apply(translate(ii,globals,locals),Var(state))
@@ -43,6 +44,7 @@ object Translator extends Typechecker {
                                   Elem(vector,Var(v)),Empty(vector))),
                        Apply(translate(u,globals,locals),Var(state)))
           case MatrixIndex(u,ii,jj)
+            if false
             => val i = newvar
                val j = newvar
                val v = newvar
@@ -86,7 +88,7 @@ object Translator extends Typechecker {
           => update(u,Merge(Apply(translate(u,globals,locals),state),Elem(vector,Tuple(List(i,value)))),
                     state,globals,locals)
         case MatrixIndex(u,i,j)
-          => update(u,Merge(dest,Elem(matrix,Tuple(List(Tuple(List(i,j)),value)))),
+          => update(u,Merge(Apply(translate(u,globals,locals),state),Elem(matrix,Tuple(List(Tuple(List(i,j)),value)))),
                     state,globals,locals)
         case _ => throw new Error("Illegal destination: "+dest)
     }
@@ -108,7 +110,7 @@ object Translator extends Typechecker {
                            gs, ls+((v,t)) )
                     case ((f,gs,ls),DeclareVar(v,t,Var("null")))
                       => val st = newvar
-                         ( Lambda(VarPat(st),Apply(f,Var(st))),
+                         ( Lambda(VarPat(st),update(Var(v),Undefined(t),Apply(f,Var(st)),gs+((v,t)),ls)),
                            gs+((v,t)), ls )
                     case ((f,gs,ls),DeclareVar(v,t,e))
                       => val st = newvar

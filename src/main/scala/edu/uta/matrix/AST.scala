@@ -36,6 +36,7 @@ sealed abstract class Pattern
     case class StarPat () extends Pattern
 
 sealed abstract class Expr extends Positional
+    case class Undefined ( tp: Type ) extends Expr
     case class Var ( name: String ) extends Expr
     case class Nth ( tuple: Expr, num: Int ) extends Expr
     case class Project ( record: Expr, attribute: String ) extends Expr
@@ -98,8 +99,10 @@ object AST {
     e match {
       case Nth(x,n) => Nth(f(x),n)
       case Project(x,n) => Project(f(x),n)
-      case VectorIndex(b,i) => VectorIndex(apply(b,f),f(i))
-      case MatrixIndex(b,i,j) => MatrixIndex(apply(b,f),f(i),f(j))
+      case VectorIndex(b,i)
+        => VectorIndex(f(b),f(i))
+      case MatrixIndex(b,i,j)
+        => MatrixIndex(f(b),f(i),f(j))
       case flatMap(Lambda(p,b),x)
         => flatMap(Lambda(p,f(b)),f(x))
       case groupBy(x) => groupBy(f(x))

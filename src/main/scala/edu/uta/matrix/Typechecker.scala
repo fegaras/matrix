@@ -57,6 +57,8 @@ class Typechecker {
 
     def typecheck ( e: Expr, env: Environment ): Type
       = e match {
+          case Undefined(tp)
+            => tp
           case Var(v)
             => if (env.contains(v)) env(v)
                else throw new Error("Undeclared variable: "+v)
@@ -100,7 +102,18 @@ class Typechecker {
                }
           case Let(p,u,b)
             => typecheck(b,bindPattern(p,typecheck(u,env),env))
-          case Collection(f,args) if List("vector","matrix","bag","list").contains(f)
+          case Collection("matrix",args)
+            => val tp = args.foldRight(AnyType():Type){ case (a,r)
+                                        => typecheck(a,env) match {
+                                               case TupleType(tps)
+                                                 => tps.foldRight(r){ case (t,s)
+                                                        => if (s != AnyType() && t != s)
+                                                              throw new Error("Incompatible types in matrix "+e)
+                                                           else t }
+                                               case _ => throw new Error("Matrix elements must be tuples: "+e) } }
+               ParametricType("matrix",List(tp))
+          case Collection(f,args)
+            if List("vector","matrix","bag","list").contains(f)
             => val tp = args.foldRight(AnyType():Type){ case (a,r)
                                         => val t = typecheck(a,env)
                                            if (r != AnyType() && t != r)
@@ -125,7 +138,7 @@ class Typechecker {
                tp
           case Apply(Lambda(p,b),arg)
             => typecheck(b,bindPattern(p,typecheck(arg,env),env))
-          case Apply(flatMap(Lambda(p,Elem(BaseMonoid(composition),Lambda(q,b))),u),x)
+          case Apply(flatMap(Lambda(p,Elem(BaseMonoid("composition"),Lambda(q,b))),u),x)
             => val xtp = typecheck(x,env)
                typecheck(u,env) match {
                   case ParametricType(f,List(utp)) if List("vector","matrix","bag","list").contains(f)
@@ -139,7 +152,7 @@ class Typechecker {
                   case FunctionType(dt,rt)
                     => if (typeMatch(dt,tp)) rt
                       else throw new Error("Function "+f+" cannot be applied to "+arg+" of type "+tp);
-                  case tp => throw new Error("Expected a function "+f)
+                  case _ => throw new Error("Expected a function "+f)
                }
           case Tuple(cs)
             => TupleType(cs.map{ typecheck(_,env) })
@@ -151,6 +164,25 @@ class Typechecker {
                     => typecheck(b,bindPattern(p,tp,env))
                   case tp => throw new Error("flatMap must be over a collection in "+e+" (found "+tp+")")
                }
+          case Merge(x,y)
+            => val xtp = typecheck(x,env)
+               if (!typeMatch(xtp,typecheck(y,env)))
+                   throw new Error("Incompatible types in Merge: "+e)
+               xtp
+          case Elem(BaseMonoid("vector"),x)
+            => typecheck(x,env) match {
+                  case TupleType(List(_,tp))
+                    => ParametricType("vector",List(tp))
+                  case _ => throw new Error("Wrong vector: "+e)
+               }
+          case Elem(BaseMonoid("matrix"),x)
+            => typecheck(x,env) match {
+                  case TupleType(List(_,tp))
+                    => ParametricType("matrix",List(tp))
+                  case _ => throw new Error("Wrong matrix: "+e)
+               }
+          case Elem(BaseMonoid(m),x)
+            => ParametricType(m,List(typecheck(x,env)))
           case StringConst(_) => stringType
           case IntConst(_) => intType
           case DoubleConst(_) => doubleType
