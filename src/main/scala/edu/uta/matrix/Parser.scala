@@ -176,7 +176,7 @@ object Parser extends StandardTokenParsers {
 
   def stmt: Parser[Stmt]
       = ( "val" ~ ident ~ ":" ~ stype ~ "=" ~ expr ^^
-          { case _~v~_~t~_~e => DeclareVal(v,t,e) }
+          { case _~v~_~t~_~e => DeclareVar(v,t,e) }          // DeclareVal not supported yet
         | "var" ~ ident ~ ":" ~ stype ~ opt( "=" ~ expr ) ^^
           { case _~v~_~t~None => DeclareVar(v,t,Var("null"))
             case _~v~_~t~Some(_~e) => DeclareVar(v,t,e) }

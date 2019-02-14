@@ -24,10 +24,18 @@ class Typechecker {
     val doubleType = BasicType("double")
     val stringType = BasicType("string")
 
+    def isCollection ( f: String ): Boolean
+      = List("vector","matrix","bag","list").contains(f)
+
     def typeMatch ( t1: Type, t2: Type ): Boolean
       = ((t1 == AnyType() || t2 == AnyType())
          || t1 == t2
          || ((t1,t2) match {
+                case (ParametricType("vector",List(ts1)),ParametricType("bag",List(TupleType(List(it,ts2)))))
+                  => typeMatch(ts1,ts2) && typeMatch(it,intType)
+                case (ParametricType("matrix",List(ts1)),
+                      ParametricType("bag",List(TupleType(List(TupleType(List(it1,it2)),ts2)))))
+                  => typeMatch(ts1,ts2) && typeMatch(it1,intType) && typeMatch(it2,intType)
                 case (ParametricType(n1,ts1),ParametricType(n2,ts2))
                   if n1==n2 && ts1.length == ts2.length
                   => (ts1 zip ts2).map{ case (tp1,tp2) => typeMatch(tp1,tp2) }.reduce(_&&_)
@@ -113,7 +121,7 @@ class Typechecker {
                                                case _ => throw new Error("Matrix elements must be tuples: "+e) } }
                ParametricType("matrix",List(tp))
           case Collection(f,args)
-            if List("vector","matrix","bag","list").contains(f)
+            if isCollection(f)
             => val tp = args.foldRight(AnyType():Type){ case (a,r)
                                         => val t = typecheck(a,env)
                                            if (r != AnyType() && t != r)
@@ -158,12 +166,6 @@ class Typechecker {
             => TupleType(cs.map{ typecheck(_,env) })
           case Record(cs)
             => RecordType(cs.map{ case (v,u) => v->typecheck(u,env) })
-          case flatMap(Lambda(p,b),u)
-            => typecheck(u,env) match {
-                  case ParametricType(f,List(tp)) if List("vector","matrix","bag","list").contains(f)
-                    => typecheck(b,bindPattern(p,tp,env))
-                  case tp => throw new Error("flatMap must be over a collection in "+e+" (found "+tp+")")
-               }
           case Merge(x,y)
             => val xtp = typecheck(x,env)
                if (!typeMatch(xtp,typecheck(y,env)))
@@ -171,18 +173,32 @@ class Typechecker {
                xtp
           case Elem(BaseMonoid("vector"),x)
             => typecheck(x,env) match {
-                  case TupleType(List(_,tp))
+                  case TupleType(List(BasicType("int"),tp))
                     => ParametricType("vector",List(tp))
                   case _ => throw new Error("Wrong vector: "+e)
                }
           case Elem(BaseMonoid("matrix"),x)
             => typecheck(x,env) match {
-                  case TupleType(List(_,tp))
+                  case TupleType(List(TupleType(List(BasicType("int"),BasicType("int"))),tp))
                     => ParametricType("matrix",List(tp))
                   case _ => throw new Error("Wrong matrix: "+e)
                }
           case Elem(BaseMonoid(m),x)
+            if isCollection(m)
             => ParametricType(m,List(typecheck(x,env)))
+          case Empty(BaseMonoid(f))
+            if isCollection(f)
+            => ParametricType(f,List(AnyType()))
+          case flatMap(Lambda(p,b),u)
+            => typecheck(u,env) match {
+                  case ParametricType("vector",List(tp))
+                    => typecheck(b,bindPattern(p,TupleType(List(intType,tp)),env))
+                  case ParametricType("matrix",List(tp))
+                    => typecheck(b,bindPattern(p,TupleType(List(TupleType(List(intType,intType)),tp)),env))
+                  case ParametricType(f,List(tp)) if isCollection(f)
+                    => typecheck(b,bindPattern(p,tp,env))
+                  case tp => throw new Error("flatMap must be over a collection in "+e+" (found "+tp+")")
+               }
           case StringConst(_) => stringType
           case IntConst(_) => intType
           case DoubleConst(_) => doubleType
@@ -218,7 +234,8 @@ class Typechecker {
                else typecheck(u,env+((v,intType)))
           case ForeachS(v,c,u)
             => typecheck(c,env) match {
-                  case ParametricType(f,List(tp)) if List("vector","matrix","bag","list").contains(f)
+                  case ParametricType(f,List(tp))
+                    if isCollection(f)
                     => typecheck(u,env+((v,tp)))
                   case _ => throw new Error("Foreach statement must be over a collection: "+s)
                }
@@ -237,6 +254,7 @@ class Typechecker {
       ("/",List(doubleType,doubleType),doubleType),
       ("-",List(intType),intType),
       ("-",List(doubleType),doubleType),
+      ("==",List(AnyType(),AnyType()),boolType),
       ("gen",List(intType,intType,intType),ParametricType("list",List(intType)))
     )
 
