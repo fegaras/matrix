@@ -1,5 +1,5 @@
 /*
- * Copyright © 2018 University of Texas at Arlington
+ * Copyright © 2019 University of Texas at Arlington
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -35,6 +35,13 @@ sealed abstract class Pattern
     case class VarPat ( name: String ) extends Pattern
     case class StarPat () extends Pattern
 
+sealed abstract class Qualifier
+    case class Generator ( pattern: Pattern, domain: Expr ) extends Qualifier
+    case class LetBinding ( pattern: Pattern, domain: Expr ) extends Qualifier
+    case class Predicate ( predicate: Expr ) extends Qualifier
+    case class GroupByQual ( pattern: Pattern, key: Expr ) extends Qualifier
+    case class OrderByQual ( key: Expr ) extends Qualifier
+
 sealed abstract class Expr extends Positional
     case class Undefined ( tp: Type ) extends Expr
     case class Var ( name: String ) extends Expr
@@ -58,6 +65,7 @@ sealed abstract class Expr extends Positional
     case class Tuple ( args: List[Expr] ) extends Expr
     case class Record ( args: Map[String,Expr] ) extends Expr
     case class Collection ( kind: String, args: List[Expr] ) extends Expr
+    case class Comprehension ( monoid: Monoid, head: Expr, qualifiers: List[Qualifier] ) extends Expr
     case class Empty ( m: Monoid ) extends Expr
     case class Elem ( m: Monoid, elem: Expr ) extends Expr
     case class Merge ( left: Expr, right: Expr ) extends Expr
@@ -94,113 +102,211 @@ object AST {
       case _ => p
     }
 
+  def apply ( q: Qualifier, f: Expr => Expr ): Qualifier =
+    q match {
+      case Generator(p,e)
+        => Generator(p,f(e))
+      case LetBinding(p,e)
+        => LetBinding(p,f(e))
+      case Predicate(e)
+        => Predicate(f(e))
+      case GroupByQual(p,k)
+        => GroupByQual(p,f(k))
+      case OrderByQual(k)
+        => OrderByQual(f(k))
+    }
+
   /** apply f to every expression in e */
   def apply ( e: Expr, f: Expr => Expr ): Expr =
     e match {
-      case Nth(x,n) => Nth(f(x),n)
-      case Project(x,n) => Project(f(x),n)
+      case Nth(x,n)
+        => Nth(f(x),n)
+      case Project(x,n)
+        => Project(f(x),n)
       case VectorIndex(b,i)
         => VectorIndex(f(b),f(i))
       case MatrixIndex(b,i,j)
         => MatrixIndex(f(b),f(i),f(j))
       case flatMap(Lambda(p,b),x)
         => flatMap(Lambda(p,f(b)),f(x))
-      case groupBy(x) => groupBy(f(x))
-      case orderBy(x) => orderBy(f(x))
-      case coGroup(x,y) => coGroup(f(x),f(y))
-      case cross(x,y) => cross(f(x),f(y))
-      case reduce(m,x) => reduce(m,f(x))
+      case groupBy(x)
+        => groupBy(f(x))
+      case orderBy(x)
+        => orderBy(f(x))
+      case coGroup(x,y)
+        => coGroup(f(x),f(y))
+      case cross(x,y)
+        => cross(f(x),f(y))
+      case reduce(m,x)
+        => reduce(m,f(x))
       case repeat(Lambda(p,b),x,Lambda(pp,w),n)
         => repeat(Lambda(p,f(b)),f(x),Lambda(pp,f(w)),f(n))
-      case Lambda(p,b) => Lambda(p,f(b))
-      case TypedLambda(args,b) => TypedLambda(args,f(b))
-      case Call(n,es) => Call(n,es.map(f(_)))
-      case Apply(h,a) => Apply(f(h),f(a))
-      case Let(p,v,b) => Let(p,f(v),f(b))
-      case IfE(p,x,y) => IfE(f(p),f(x),f(y))
-      case Tuple(es) => Tuple(es.map(f(_)))
-      case Record(es) => Record(es.map{ case (n,v) => (n,f(v)) })
-      case Collection(k,es) => Collection(k,es.map(f(_)))
-      case Elem(m,x) => Elem(m,f(x))
-      case Merge(x,y) => Merge(f(x),f(y))
+      case Lambda(p,b)
+        => Lambda(p,f(b))
+      case TypedLambda(args,b)
+        => TypedLambda(args,f(b))
+      case Call(n,es)
+        => Call(n,es.map(f(_)))
+      case Apply(h,a)
+        => Apply(f(h),f(a))
+      case Let(p,v,b)
+        => Let(p,f(v),f(b))
+      case IfE(p,x,y)
+        => IfE(f(p),f(x),f(y))
+      case Tuple(es)
+        => Tuple(es.map(f(_)))
+      case Record(es)
+        => Record(es.map{ case (n,v) => (n,f(v)) })
+      case Collection(k,es)
+        => Collection(k,es.map(f(_)))
+      case Comprehension(m,h,qs)
+        => Comprehension(m,f(h),qs.map(apply(_,f)))
+      case Elem(m,x)
+        => Elem(m,f(x))
+      case Merge(x,y)
+        => Merge(f(x),f(y))
       case _ => e
     }
 
   /** apply f to every statement in s */
   def apply ( s: Stmt, f: Stmt => Stmt ): Stmt =
     s match {
-      case Block(l) => Block(l.map(f(_)))
-      case ForS(v,a,b,c,body) => ForS(v,a,b,c,f(body))
-      case ForeachS(v,e,body) => ForeachS(v,e,f(body))
-      case IfS(p,t,e) => IfS(p,f(t),f(e))
+      case Block(l)
+        => Block(l.map(f(_)))
+      case ForS(v,a,b,c,body)
+        => ForS(v,a,b,c,f(body))
+      case ForeachS(v,e,body)
+        => ForeachS(v,e,f(body))
+      case IfS(p,t,e)
+        => IfS(p,f(t),f(e))
       case _ => s
     }
 
   /** fold over patterns */
   def accumulatePat[T] ( p: Pattern, f: Pattern => T, acc: (T,T) => T, zero: T ): T =
     p match {
-      case TuplePat(ps) => ps.map(f(_)).fold(zero)(acc)
+      case TuplePat(ps)
+        => ps.map(f(_)).fold(zero)(acc)
       case _ => zero
     }
 
   /** fold over expressions */
   def accumulate[T] ( e: Expr, f: Expr => T, acc: (T,T) => T, zero: T ): T =
     e match {
-      case Nth(x,_) => f(x)
-      case Project(x,_) => f(x)
-      case VectorIndex(b,i) => acc(f(b),f(i))
-      case MatrixIndex(b,i,j) => acc(f(b),acc(f(i),f(j)))
-      case flatMap(b,x) => acc(f(b),f(x))
-      case groupBy(x) => f(x)
-      case orderBy(x) => f(x)
-      case coGroup(x,y) => acc(f(x),f(y))
-      case cross(x,y) => acc(f(x),f(y))
-      case reduce(_,x) => f(x)
-      case repeat(b,x,w,n) => acc(acc(f(b),acc(f(w),f(x))),f(n))
-      case Lambda(_,b) => f(b)
-      case TypedLambda(_,b) => f(b)
-      case Call(_,es) => es.map(f(_)).fold(zero)(acc)
-      case Apply(h,a) => acc(f(h),f(a))
-      case Let(_,v,b) => acc(f(v),f(b))
-      case IfE(p,x,y) => acc(f(p),acc(f(x),f(y)))
-      case Tuple(es) => es.map(f(_)).fold(zero)(acc)
-      case Record(es) => es.map{ case (_,v) => f(v) }.fold(zero)(acc)
-      case Collection(_,es) => es.map(f(_)).fold(zero)(acc)
-      case Elem(_,x) => f(x)
-      case Merge(x,y) => acc(f(x),f(y))
+      case Nth(x,_)
+        => f(x)
+      case Project(x,_)
+        => f(x)
+      case VectorIndex(b,i)
+        => acc(f(b),f(i))
+      case MatrixIndex(b,i,j)
+        => acc(f(b),acc(f(i),f(j)))
+      case flatMap(b,x)
+        => acc(f(b),f(x))
+      case groupBy(x)
+        => f(x)
+      case orderBy(x)
+        => f(x)
+      case coGroup(x,y)
+        => acc(f(x),f(y))
+      case cross(x,y)
+        => acc(f(x),f(y))
+      case reduce(_,x)
+        => f(x)
+      case repeat(b,x,w,n)
+        => acc(acc(f(b),acc(f(w),f(x))),f(n))
+      case Lambda(_,b)
+        => f(b)
+      case TypedLambda(_,b)
+        => f(b)
+      case Call(_,es)
+        => es.map(f(_)).fold(zero)(acc)
+      case Apply(h,a)
+        => acc(f(h),f(a))
+      case Let(_,v,b)
+        => acc(f(v),f(b))
+      case IfE(p,x,y)
+        => acc(f(p),acc(f(x),f(y)))
+      case Tuple(es)
+        => es.map(f(_)).fold(zero)(acc)
+      case Record(es)
+        => es.map{ case (_,v) => f(v) }.fold(zero)(acc)
+      case Collection(_,es)
+        => es.map(f(_)).fold(zero)(acc)
+      case Comprehension(_,h,qs)
+        => acc(f(h),qs.map{
+              case Generator(_,u) => f(u)
+              case LetBinding(_,u) => f(u)
+              case Predicate(u) => f(u)
+              case GroupByQual(_,k) => f(k)
+              case OrderByQual(k) => f(k)
+           }.reduce(acc))
+      case Elem(_,x)
+        => f(x)
+      case Merge(x,y)
+        => acc(f(x),f(y))
       case _ => zero
     }
 
   /** return the list of all variables in the pattern p */
   def patvars ( p: Pattern ): List[String] = 
     p match {
-      case VarPat(s) => List(s)
+      case VarPat(s)
+        => List(s)
       case _ => accumulatePat[List[String]](p,patvars,_++_,Nil)
     }
 
   /** true if the variable v is captured in the pattern p */
   def capture ( v: String, p: Pattern ): Boolean =
     p match {
-      case VarPat(s) => v==s
+      case VarPat(s)
+        => v==s
       case _ => accumulatePat[Boolean](p,capture(v,_),_||_,false)
+    }
+
+  def subst ( v: String, te: Expr, qs: List[Qualifier] ): List[Qualifier] =
+    qs match {
+      case Nil => Nil
+      case Generator(p,u)::r
+        => Generator(p,subst(v,te,u))::(if (capture(v,p)) r else subst(v,te,r))
+      case LetBinding(p,u)::r
+        => LetBinding(p,subst(v,te,u))::(if (capture(v,p)) r else subst(v,te,r))
+      case Predicate(u)::r
+        => Predicate(subst(v,te,u))::subst(v,te,r)
+      case GroupByQual(p,k)::r
+        => GroupByQual(p,subst(v,te,k))::(if (capture(v,p)) r else subst(v,te,r))
+      case OrderByQual(k)::r
+        => OrderByQual(subst(v,te,k))::subst(v,te,r)
     }
 
   /** beta reduction: substitute every occurrence of variable v in e with te */
   def subst ( v: String, te: Expr, e: Expr ): Expr =
     e match {
-      case Var(s) => if (s==v) te else e
-      case flatMap(Lambda(p,b),x) if capture(v,p)
+      case Var(s)
+        => if (s==v) te else e
+      case flatMap(Lambda(p,b),x)
+        if capture(v,p)
         => flatMap(Lambda(p,b),subst(v,te,x))
-      case lp@Lambda(p,_) if capture(v,p) => lp
-      case lp@TypedLambda(args,_) if args.map(x => capture(v,VarPat(x._1))).reduce(_||_) => lp
-      case lp@Let(p,_,_) if capture(v,p) => lp
+      case lp@Lambda(p,_)
+        if capture(v,p)
+        => lp
+      case lp@TypedLambda(args,_)
+        if args.map(x => capture(v,VarPat(x._1))).reduce(_||_)
+        => lp
+      case lp@Let(p,_,_)
+        if capture(v,p)
+        => lp
+      case Comprehension(m,h,qs)
+        => Comprehension(m,subst(v,te,h),subst(v,te,qs))
       case _ => apply(e,subst(v,te,_))
     }
 
   /** substitute every occurrence of term 'from' in pattern p with 'to' */
   def subst ( from: String, to: String, p: Pattern ): Pattern =
     p match {
-      case VarPat(s) if s==from => VarPat(to)
+      case VarPat(s)
+        if s==from
+        => VarPat(to)
       case _ => apply(p,subst(from,to,_))
   }
 
@@ -211,14 +317,35 @@ object AST {
   /** number of times the variable v is accessed in e */
   def occurrences ( v: String, e: Expr ): Int =
     e match {
-      case Var(s) => if (s==v) 1 else 0
-      case flatMap(Lambda(p,_),x) if capture(v,p)
+      case Var(s)
+        => if (s==v) 1 else 0
+      case flatMap(Lambda(p,_),x)
+        if capture(v,p)
         => occurrences(v,x)
       case repeat(f,init,p,n)   // assume loop is executed 10 times
         => occurrences(v,f)*10+occurrences(v,init)+occurrences(v,n)+occurrences(v,p)*10
-      case Lambda(p,_) if capture(v,p) => 0
-      case TypedLambda(args,_) if args.map(x => capture(v,VarPat(x._1))).reduce(_||_) => 0
-      case Let(p,_,_) if capture(v,p) => 0
+      case Lambda(p,_)
+        if capture(v,p)
+        => 0
+      case TypedLambda(args,_)
+        if args.map(x => capture(v,VarPat(x._1))).reduce(_||_)
+        => 0
+      case Let(p,_,_)
+        if capture(v,p)
+        => 0
+      case Comprehension(_,h,qs)
+        => qs.foldLeft(occurrences(v,h)) {
+              case (r,Generator(p,u))
+                => occurrences(v,u) + (if (capture(v,p)) 0 else r)
+              case (r,LetBinding(p,u))
+                => occurrences(v,u) + (if (capture(v,p)) 0 else r)
+              case (r,Predicate(u))
+                => occurrences(v,u) + r
+              case (r,GroupByQual(p,k))
+                => occurrences(v,k) + (if (capture(v,p)) 0 else r)
+              case (r,OrderByQual(k))
+                => occurrences(v,k) + r
+           }
       case _ => accumulate[Int](e,occurrences(v,_),_+_,0)
     }
 
@@ -239,6 +366,20 @@ object AST {
         => freevars(b,except++args.map(_._1))
       case Let(p,v,b)
         => freevars(b,except++patvars(p))++freevars(v,except)
+      case Comprehension(_,h,qs)
+        => val (fs,es) = qs.foldLeft[(List[String],List[String])]((Nil,except)) {
+              case ((fl,el),Generator(p,u))
+                => (fl++freevars(u,el),el++patvars(p))
+              case ((fl,el),LetBinding(p,u))
+                => (fl++freevars(u,el),el++patvars(p))
+              case ((fl,el),Predicate(u))
+                => (fl++freevars(u,el),el)
+              case ((fl,el),GroupByQual(p,k))
+                => (fl++freevars(k,el),el++patvars(p))
+              case ((fl,el),OrderByQual(k))
+                => (fl++freevars(k,el),el)
+           }
+           fs++freevars(h,es)
       case _ => accumulate[List[String]](e,freevars(_,except),_++_,Nil)
     }
 
@@ -248,8 +389,10 @@ object AST {
   /** Convert a pattern to an expression */
   def toExpr ( p: Pattern ): Expr
       = p match {
-        case TuplePat(ps) => Tuple(ps.map(toExpr))
-        case VarPat(n) => Var(n)
+        case TuplePat(ps)
+          => Tuple(ps.map(toExpr))
+        case VarPat(n)
+          => Var(n)
         case _ => Tuple(Nil)
       }
 }

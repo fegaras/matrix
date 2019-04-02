@@ -19,9 +19,9 @@ object Matrix {
   def main ( args: Array[String] ) {
     val line = scala.io.Source.fromFile(args(0)).mkString
     val e = Parser.parse(line)
+    println(Pretty.print(e.toString))
     val tpc = new Typechecker()
     tpc.typecheck(e)
-    println(Pretty.print(e.toString))
     val e1 = Translator.translate(e)
     println(Pretty.print(e1.toString))
     val ne = Normalizer.normalizeAll(e1)
